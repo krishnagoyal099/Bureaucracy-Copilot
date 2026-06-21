@@ -1,0 +1,20 @@
+{
+  // Disable the built-in CSS validator — Tailwind CSS handles validation instead.
+  // Without this, the IDE flags @tailwind and @apply as unknown at-rules.
+  "css.validate": false,
+  "less.validate": false,
+  "scss.validate": false,
+
+  // Tell the Tailwind CSS IntelliSense extension where to find Tailwind directives
+  "tailwindCSS.includeLanguages": {
+    "plaintext": "html"
+  },
+  // Treat files with these extensions as containing Tailwind classes
+  "files.associations": {
+    "*.css": "tailwindcss"
+  },
+
+  // TypeScript: always use the workspace version, not VS Code's bundled one
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true
+}

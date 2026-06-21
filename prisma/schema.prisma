@@ -1,0 +1,422 @@
+// prisma/schema.prisma
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ────────────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum DocumentCategory {
+  ID_PROOF
+  ADDRESS_PROOF
+  INCOME_PROOF
+  EDUCATION
+  RESUME
+  PHOTO
+  MEDICAL
+  FINANCIAL
+  OTHER
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum OpportunityType {
+  SCHOLARSHIP
+  INTERNSHIP
+  ADMISSION
+  GOVERNMENT_SCHEME
+  VISA
+  JOB
+  OTHER
+}
+
+enum OpportunityStatus {
+  DRAFT
+  PROCESSING
+  ANALYZED
+  FAILED
+}
+
+enum EligibilityStatus {
+  ELIGIBLE
+  POSSIBLY_ELIGIBLE
+  NOT_ELIGIBLE
+  UNKNOWN
+}
+
+enum AnalysisRunType {
+  DOC_CLASSIFY
+  DOC_EXTRACT
+  OPPORTUNITY_EXTRACT
+  ELIGIBILITY
+  MISSING_DOC
+  ACTION_PLAN
+}
+
+enum AnalysisRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum ActionItemStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  SKIPPED
+}
+
+enum ActionItemPriority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum FileType {
+  PDF
+  PNG
+  JPG
+  JPEG
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// USER
+// ────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  emailVerified   DateTime?
+  name            String?
+  image           String?
+  passwordHash    String?  // for credentials provider
+  role            UserRole @default(USER)
+  twoFactorSecret String?
+
+  // Profile (encrypted fields stored as bytes via app layer)
+  profile         Profile?
+
+  documents       Document[]
+  opportunities   Opportunity[]
+  sessions        Session[]
+  accounts        Account[]
+  analysisRuns    AnalysisRun[]
+  auditLogs       AuditLog[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([email])
+  @@index([createdAt])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// PROFILE — encrypted PII
+// ────────────────────────────────────────────────────────────────────────────
+
+model Profile {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fullNameEncrypted   Bytes
+  fullNameIv          Bytes
+  dobEncrypted        Bytes
+  dobIv               Bytes
+  phoneEncrypted      Bytes
+  phoneIv             Bytes
+  addressEncrypted    Bytes
+  addressIv           Bytes
+  incomeEncrypted     Bytes
+  incomeIv            Bytes
+
+  education           Json     // structured, non-PII
+  profileComplete     Boolean  @default(false)
+  readinessBaseline   Int      @default(0)   // 0..100
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  version             Int      @default(1)   // optimistic concurrency
+
+  @@index([userId])
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// DOCUMENTS
+// ────────────────────────────────────────────────────────────────────────────
+
+model Document {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fileName        String
+  fileSize        Int
+  fileType        FileType
+  mimeType        String
+
+  // UploadThing file key + Supabase mirror path
+  uploadThingKey  String           @unique
+  storagePath     String
+
+  // Content
+  contentHash     String           // SHA-256 dedupe (removed @unique for multi-tenant support)
+  extractedText   String?          // raw text, may be long
+  extractedJson   Json?            // structured extraction
+  category        DocumentCategory @default(OTHER)
+  categoryConfidence Float         @default(0)
+  status          DocumentStatus   @default(PENDING)
+
+  // Metadata
+  issuingAuthority String?
+  issueDate       DateTime?
+  expiryDate      DateTime?
+  documentNumber  String?          // masked
+  verifiedAt      DateTime?
+
+  // Lifecycle
+  uploadedAt      DateTime         @default(now())
+  processedAt     DateTime?
+  failedReason    String?
+  deletedAt       DateTime?
+
+  analysisRuns    AnalysisRun[]
+  docRequirements DocRequirement[]
+
+  @@index([userId, uploadedAt])
+  @@index([userId, category])
+  @@index([contentHash])
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// OPPORTUNITIES
+// ────────────────────────────────────────────────────────────────────────────
+
+model Opportunity {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title           String
+  type            OpportunityType  @default(OTHER)
+  sourceUrl       String?
+  provider        String?
+
+  // Original upload
+  fileName        String
+  uploadThingKey  String           @unique
+  fileSize        Int
+  fileType        FileType
+  extractedText   String?
+
+  // AI-extracted structured data
+  eligibilityRequirements Json?
+  requiredDocuments       Json?
+  deadlines               Json?
+  applicationSteps        Json?
+  importantNotes          String[]
+
+  status          OpportunityStatus @default(DRAFT)
+  analyzedAt      DateTime?
+
+  eligibilityReports EligibilityReport[]
+  actionPlans        ActionPlan[]
+  docRequirements    DocRequirement[]
+  analysisRuns       AnalysisRun[]
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  deletedAt       DateTime?
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+}
+
+// Requirement → Document link (which uploaded doc satisfies which req)
+model DocRequirement {
+  id              String      @id @default(cuid())
+  opportunityId   String
+  documentId      String?
+
+  requirement     String
+  isOptional      Boolean     @default(false)
+  matchedCategory DocumentCategory?
+  matchConfidence Float       @default(0)
+  status          String      @default("PENDING") // PENDING | MATCHED | MISSING
+
+  opportunity     Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  document        Document?   @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([opportunityId])
+  @@index([documentId])
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ELIGIBILITY & ACTION PLANS
+// ────────────────────────────────────────────────────────────────────────────
+
+model EligibilityReport {
+  id              String           @id @default(cuid())
+  userId          String
+  opportunityId   String
+  opportunity     Opportunity      @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  status          EligibilityStatus @default(UNKNOWN)
+  confidence      Float            @default(0)
+  reasons         String[]
+  matchedCriteria String[]
+  unmatchedCriteria String[]
+  warnings        String[]
+  rawModelOutput  Json?
+
+  version         Int              @default(1)
+  generatedAt     DateTime         @default(now())
+
+  @@unique([opportunityId, version])
+  @@index([userId, status])
+  @@index([opportunityId])
+}
+
+model ActionPlan {
+  id                  String           @id @default(cuid())
+  userId              String
+  opportunityId       String
+  opportunity         Opportunity      @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  readinessScore      Int              @default(0)  // 0..100
+  estimatedDaysToReady Int             @default(0)
+  summary             String
+
+  items               ActionItem[]
+  version             Int              @default(1)
+  generatedAt         DateTime         @default(now())
+
+  @@index([userId, opportunityId])
+}
+
+model ActionItem {
+  id              String           @id @default(cuid())
+  actionPlanId    String
+  actionPlan      ActionPlan       @relation(fields: [actionPlanId], references: [id], onDelete: Cascade)
+
+  title           String
+  description     String
+  priority        ActionItemPriority @default(MEDIUM)
+  status          ActionItemStatus   @default(PENDING)
+  order           Int
+  estimatedMinutes Int             @default(0)
+  metadata        Json?
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([actionPlanId, order])
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// AI ANALYSIS RUNS (audit + cost tracking)
+// ────────────────────────────────────────────────────────────────────────────
+
+model AnalysisRun {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            AnalysisRunType
+  status          AnalysisRunStatus @default(RUNNING)
+  operationId     String           @unique  // idempotency
+
+  documentId      String?
+  document        Document?        @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  opportunityId   String?
+  opportunity     Opportunity?     @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+
+  promptVersion   String
+  model           String
+  tokensIn        Int              @default(0)
+  tokensOut       Int              @default(0)
+  latencyMs       Int              @default(0)
+  costUsd         Float            @default(0)
+
+  errorMessage    String?
+  resultJson      Json?
+
+  startedAt       DateTime         @default(now())
+  finishedAt      DateTime?
+
+  @@index([userId, type, status])
+  @@index([operationId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entity, entityId])
+}
