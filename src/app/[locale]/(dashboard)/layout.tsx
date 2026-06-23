@@ -20,7 +20,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   return (
-    <div className="dark relative flex min-h-screen bg-background text-foreground overflow-x-hidden">
+    <div className="relative flex min-h-screen bg-background text-foreground overflow-x-hidden">
       <div className="noise-overlay" />
       <div className="absolute inset-0 z-0 flex pointer-events-none">
         <div className="grid-lines-4 w-full">
